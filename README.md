@@ -1,1 +1,2 @@
 # YouTube Videos & MP3 Downloader
+This Python script utilizes the Pytube library to provide a menu-driven interface for downloading YouTube videos, playlists, and MP3 songs. It allows users to download individual videos, entire playlists, and convert videos to MP3 format. The script is designed to provide customization options for selecting specific videos from playlists and supports high-resolution video downloads.
