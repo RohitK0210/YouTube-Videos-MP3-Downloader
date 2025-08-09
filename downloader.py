@@ -1,128 +1,189 @@
 import os
 import string
-from pytube import YouTube, Channel, Playlist
-from typing import Optional
+from pytube import YouTube, Playlist
+from pytube.exceptions import PytubeError, VideoUnavailable
+from typing import Optional, Callable
+from urllib.error import URLError
 
-UNDERLINE = '-' * 100
-
-def download_video(video_link: str, resolution: str = 'highest', output_dir: Optional[str] = None) -> None:
+def get_video_info(video_link: str) -> dict:
+    """
+    Get video information without downloading it.
+    """
     try:
         yt = YouTube(video_link)
-        stream = get_video_stream(yt, resolution)
-        if stream:
-            print(f'\tChannel Name: {yt.author}')
-            print(f'\tChannel URL: {yt.channel_url}')
-            print(f'\tVideo Views: {yt.views} views')
-            print(UNDERLINE)
-            print(f'\tDownloading: {yt.title}...')
-            output_path = output_dir or os.path.join(os.getcwd(), sanitize_filename(yt.author))
-            if not os.path.exists(output_path):
-                os.makedirs(output_path)
-            stream.download(output_path=output_path)
-            print(f'\t{yt.title} downloaded successfully')
-        else:
-            print(f'No suitable stream found for {video_link}')
-        print(UNDERLINE)
+        return {
+            "title": yt.title,
+            "author": yt.author,
+            "length": yt.length,
+            "views": yt.views,
+            "thumbnail_url": yt.thumbnail_url,
+        }
+    except VideoUnavailable:
+        raise ValueError("Video is unavailable. It may be private, deleted, or age-restricted.")
+    except URLError:
+        raise ConnectionError("No internet connection or YouTube is down.")
+    except PytubeError as e:
+        raise ValueError(f"Invalid YouTube URL or video not available: {e}")
     except Exception as e:
-        print(f'Error downloading video: {e}')
+        raise Exception(f"An unexpected error occurred: {e}")
 
-def download_playlist(playlist_link: str, resolution: str = 'highest', output_dir: Optional[str] = None) -> None:
+def get_playlist_info(playlist_link: str) -> dict:
+    """
+    Get playlist information without downloading it.
+    """
+    try:
+        pl = Playlist(playlist_link)
+        return {
+            "title": pl.title,
+            "owner": pl.owner,
+            "length": pl.length,
+            "views": pl.views,
+            "thumbnail_url": pl.videos[0].thumbnail_url if pl.videos else None,
+        }
+    except VideoUnavailable:
+        raise ValueError("The playlist contains unavailable videos.")
+    except URLError:
+        raise ConnectionError("No internet connection or YouTube is down.")
+    except PytubeError as e:
+        raise ValueError(f"Invalid YouTube Playlist URL or playlist not available: {e}")
+    except Exception as e:
+        raise Exception(f"An unexpected error occurred: {e}")
+
+def download_video(
+    video_link: str,
+    resolution: str = 'highest',
+    output_dir: Optional[str] = None,
+    progress_callback: Optional[Callable] = None,
+    completion_callback: Optional[Callable] = None,
+    error_callback: Optional[Callable] = None
+) -> None:
+    try:
+        yt = YouTube(video_link, on_progress_callback=progress_callback)
+        stream = get_video_stream(yt, resolution)
+
+        if not stream:
+            if error_callback:
+                error_callback(f"No suitable stream found for {resolution} resolution.")
+            return
+
+        output_path = output_dir or os.path.join(os.getcwd(), sanitize_filename(yt.author))
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+        stream.download(output_path=output_path)
+
+        if completion_callback:
+            completion_callback(yt.title)
+
+    except (PytubeError, URLError) as e:
+        if error_callback:
+            error_callback(f"Pytube/Network error: {e}")
+    except OSError as e:
+        if error_callback:
+            error_callback(f"File system error: {e}. Check permissions or disk space.")
+    except Exception as e:
+        if error_callback:
+            error_callback(f"An unexpected error occurred: {e}")
+
+def download_mp3_stream(
+    mp3_stream_link: str,
+    output_dir: Optional[str] = 'Songs',
+    progress_callback: Optional[Callable] = None,
+    completion_callback: Optional[Callable] = None,
+    error_callback: Optional[Callable] = None
+) -> None:
+    try:
+        yt_mp3 = YouTube(mp3_stream_link, on_progress_callback=progress_callback)
+        stream_song = yt_mp3.streams.filter(only_audio=True).first()
+
+        if not stream_song:
+            if error_callback:
+                error_callback("No audio stream found for this video.")
+            return
+
+        output_path = output_dir or 'Songs'
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+        downloaded_file = stream_song.download(output_path=output_path)
+        base, ext = os.path.splitext(downloaded_file)
+        new_file = base + '.mp3'
+        os.rename(downloaded_file, new_file)
+
+        if completion_callback:
+            completion_callback(yt_mp3.title)
+
+    except (PytubeError, URLError) as e:
+        if error_callback:
+            error_callback(f"Pytube/Network error: {e}")
+    except OSError as e:
+        if error_callback:
+            error_callback(f"File system error: {e}. Check permissions or disk space.")
+    except Exception as e:
+        if error_callback:
+            error_callback(f"An unexpected error occurred: {e}")
+
+def download_playlist(
+    playlist_link: str,
+    resolution: str = 'highest',
+    output_dir: Optional[str] = None,
+    progress_callback: Optional[Callable] = None,
+    completion_callback: Optional[Callable] = None,
+    error_callback: Optional[Callable] = None,
+    start_index: int = 1,
+    end_index: Optional[int] = None
+) -> None:
     try:
         yt_pl = Playlist(playlist_link)
-        for video in yt_pl.videos:
-            print(UNDERLINE)
-            print(f'\tDownloading: {video.title}...')
-            stream = get_video_stream(video, resolution)
-            if stream:
-                path = output_dir or create_path(yt_pl.owner, yt_pl.title)
-                if not os.path.exists(path):
-                    os.makedirs(path)
-                stream.download(output_path=path)
-                print(f'\t{video.title} downloaded successfully')
-            else:
-                print(f'No suitable stream found for {video.title}')
-            print(UNDERLINE)
-    except Exception as e:
-        print(f'Error downloading playlist: {e}')
 
-def download_mp3_stream(mp3_stream_link: str, output_dir: Optional[str] = 'Songs') -> None:
-    try:
-        yt_mp3 = YouTube(mp3_stream_link)
-        print(f'\tDownloading: {yt_mp3.title}...')
-        stream_song = yt_mp3.streams.get_by_itag(140).download(output_path=output_dir)
-        os.rename(stream_song, f'{stream_song[:-4]}.mp3')
-        print(f'\t{yt_mp3.title} downloaded successfully')
-        print(UNDERLINE)
-    except Exception as e:
-        print(f'Error downloading song: {e}')
+        # If no end index, download all videos
+        if end_index is None:
+            end_index = len(yt_pl.videos)
 
-def download_mp3_streams_custom(mp3_stream_links: str, output_dir: Optional[str] = 'Playlist Music') -> None:
-    try:
-        yt_pl_mp3 = Playlist(mp3_stream_links)
-        display_playlist_info(yt_pl_mp3)
-        start_index, end_index = get_custom_indices()
-        for video in yt_pl_mp3.videos[start_index - 1:end_index]:
-            print(UNDERLINE)
-            print(f'\tDownloading: {video.title}...')
-            songs = video.streams.get_by_itag(140).download(output_path=output_dir)
-            os.rename(songs, f'{songs[:-4]}.mp3')
-            print(f'\t{video.title} downloaded successfully')
-            print(UNDERLINE)
-    except Exception as e:
-        print(f'Error downloading songs: {e}')
+        # Adjust indices for 0-based list slicing
+        start_index = max(1, start_index)
+        end_index = min(len(yt_pl.videos), end_index)
 
-def download_playlist_custom(playlist_link_ct: str, resolution: str = 'highest', output_dir: Optional[str] = None) -> None:
-    try:
-        yt_pl_ct = Playlist(playlist_link_ct)
-        display_playlist_info(yt_pl_ct)
-        start_index, end_index = get_custom_indices()
-        for video in yt_pl_ct.videos[start_index - 1:end_index]:
-            print(UNDERLINE)
-            print(f'\tDownloading: {video.title}...')
-            stream = get_video_stream(video, resolution)
-            if stream:
-                path = output_dir or create_path(yt_pl_ct.owner, yt_pl_ct.title)
-                if not os.path.exists(path):
-                    os.makedirs(path)
-                stream.download(output_path=path)
-                print(f'\t{video.title} downloaded successfully')
-            else:
-                print(f'No suitable stream found for {video.title}')
-            print(UNDERLINE)
-    except Exception as e:
-        print(f'Error downloading videos: {e}')
+        videos_to_download = yt_pl.videos[start_index - 1:end_index]
 
-def get_video_stream(video, resolution: str):
+        for i, video in enumerate(videos_to_download):
+            try:
+                # Update progress with playlist info
+                playlist_progress_callback = lambda stream, chunk, bytes_remaining: progress_callback(stream, chunk, bytes_remaining, i + start_index, len(yt_pl.videos))
+
+                download_video(
+                    video.watch_url,
+                    resolution,
+                    output_dir,
+                    playlist_progress_callback,
+                    completion_callback,
+                    error_callback
+                )
+            except Exception as e:
+                if error_callback:
+                    error_callback(f"Error downloading video {video.title}: {e}")
+
+    except (PytubeError, URLError) as e:
+        if error_callback:
+            error_callback(f"Pytube/Network error with playlist: {e}")
+    except Exception as e:
+        if error_callback:
+            error_callback(f"An unexpected error occurred with the playlist: {e}")
+
+def get_video_stream(video: YouTube, resolution: str):
     if resolution == 'highest':
         return video.streams.get_highest_resolution()
     else:
-        itag_mapping = {
-            '1080p': 137, '720p': 22, '480p': 135,
-            '360p': 18, '240p': 133, '144p': 160
-        }
-        try:
-            return video.streams.get_by_itag(itag_mapping[resolution])
-        except KeyError:
-            print(f'Resolution {resolution} not available. Falling back to highest resolution.')
-            return video.streams.get_highest_resolution()
-
-def create_path(owner: str, title: str) -> str:
-    sanitized_title = sanitize_filename(title)
-    return os.path.join(os.getcwd(), f'{sanitize_filename(owner)} Playlist', sanitized_title)
+        return video.streams.filter(res=f"{resolution}p", progressive=True).first()
 
 def sanitize_filename(filename: str) -> str:
-    return filename.translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
-
-def display_playlist_info(playlist) -> None:
-    print(UNDERLINE)
-    print(f'\tTotal Videos in Playlist: {playlist.length}')
-    print(f'\tChannel Name: {playlist.owner}')
-    print(f'\tPlaylist Title: {playlist.title}')
-    print(f'\tTotal Views: {playlist.views} views')
-    print(f'\tLast Updated: {playlist.last_updated}')
-    print(UNDERLINE)
-
-def get_custom_indices() -> tuple:
-    start_index = int(input('\tEnter Starting Index: '))
-    end_index = int(input('\tEnter Ending Index: '))
-    return start_index, end_index
+    """
+    Sanitizes a string to be used as a valid filename.
+    """
+    # Remove punctuation
+    translator = str.maketrans('', '', string.punctuation)
+    sanitized = filename.translate(translator)
+    # Replace spaces with underscores
+    sanitized = sanitized.replace(' ', '_')
+    # Limit length to avoid issues with file systems
+    return sanitized[:100]
